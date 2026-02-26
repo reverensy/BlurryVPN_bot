@@ -33,25 +33,27 @@ class XUIClient:
     ВАЖНО: Для 3X-UI куки могут быть привязаны к IP, поэтому используем unsafe=True для CookieJar.
     """
     
-    def __init__(self, server: Dict[str, Any]):
+    def __init__(self, server: dict):
         """
         Инициализация клиента.
         
         Args:
-            server: Словарь с данными сервера (name, host, port, web_base_path, login, password)
+            server: Словарь с данными сервера из БД
         """
         self.server = server
+        self.host = server['host']
+        self.port = server['port']
+        self.protocol = server.get('protocol', 'https')
+        # Гарантируем, что путь начинается со слеша, но НЕ заканчивается им
+        # strip('/') убирает слеши и с начала, и с конца
+        path = server.get('web_base_path', '').strip('/')
+        # Теперь добавляем один слеш в начало (если путь не пустой)
+        path = f"/{path}" if path else ""
+        
+        self.base_url = f"{self.protocol}://{self.host}:{self.port}{path}"
+        
         self.session: Optional[aiohttp.ClientSession] = None
         self.is_authenticated = False
-        
-        # Формируем базовый URL
-        # Base: https://ip:port/secret_path
-        # Убираем конечный слеш из base_path если есть, чтобы не дублировать
-        base_path = server['web_base_path'].rstrip('/')
-        # Добавляем начальный слеш если нет
-        if not base_path.startswith('/'):
-            base_path = '/' + base_path
-        self.base_url = f"https://{server['host']}:{server['port']}{base_path}"
         
         logger.debug(f"Инициализирован XUIClient для {server['name']}: {self.base_url}")
     
@@ -225,10 +227,14 @@ class XUIClient:
                         return True
                     else:
                         raise VPNAPIError(f"Ошибка логина: {data.get('msg')}")
+                if resp.status == 404:
+                    raise VPNAPIError(f"Панель недоступна по пути {self.server['web_base_path']}")
                 else:
                     raise VPNAPIError(f"HTTP {resp.status} при логине")
-        except aiohttp.ClientError as e:
-            raise VPNAPIError(f"Ошибка подключения при логине: {e}")
+        except aiohttp.ClientConnectorError:
+            raise VPNAPIError(f"Не удалось подключиться к {self.server.get('protocol', 'https')}://{self.server['host']}:{self.server['port']}")
+        except asyncio.TimeoutError:
+            raise VPNAPIError("Таймаут при логине")
         except json.JSONDecodeError:
             raise VPNAPIError("Некорректный ответ при логине")
 

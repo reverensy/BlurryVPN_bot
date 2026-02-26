@@ -372,9 +372,9 @@ def _format_user_card(user: dict) -> tuple[str, any]:
     
     # Заголовок
     if is_banned:
-        header = f"🚫 *ЗАБАНЕН* — `{format_user_display(user)}`"
+        header = f"🚫 *ЗАБАНЕН* — `{escape_md(format_user_display(user))}`"
     else:
-        header = f"👤 *{format_user_display(user)}*"
+        header = f"👤 *{escape_md(format_user_display(user))}*"
     
     # Базовая инфо
     lines = [
@@ -384,7 +384,7 @@ def _format_user_card(user: dict) -> tuple[str, any]:
     ]
     
     if username:
-        lines.append(f"👤 Username: @{username}")
+        lines.append(f"👤 Username: @{escape_md(username)}")
     else:
         lines.append("👤 Username: _не указан_")
     
@@ -432,8 +432,8 @@ def _format_user_card(user: dict) -> tuple[str, any]:
     if total_payments > 0:
         total_usd = payment_stats.get('total_amount_cents', 0) / 100
         total_stars = payment_stats.get('total_amount_stars', 0)
+        total_rub = payment_stats.get('total_amount_rub', 0)
         last_payment = payment_stats.get('last_payment_at', '?')
-        tariffs = payment_stats.get('tariffs', [])
         
         lines.append(f"  📊 Всего платежей: {total_payments}")
         if total_usd > 0:
@@ -441,11 +441,10 @@ def _format_user_card(user: dict) -> tuple[str, any]:
             lines.append(f"  💰 Сумма (крипто): ${total_usd_str}")
         if total_stars > 0:
             lines.append(f"  ⭐ Сумма (Stars): {total_stars}")
+        if total_rub > 0:
+            total_rub_str = f"{total_rub:g}".replace('.', ',')
+            lines.append(f"  💳 Сумма (Рубли): {total_rub_str} ₽")
         lines.append(f"  📅 Последняя оплата: {last_payment}")
-        if tariffs:
-            # Экранируем спецсимволы Markdown в названиях тарифов
-            safe_tariffs = [escape_md(t) for t in tariffs]
-            lines.append(f"  📋 Тарифы: {', '.join(safe_tariffs)}")
     else:
         lines.append("  _Оплат не было_")
     
@@ -625,6 +624,31 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
         except Exception as e:
             logger.error(f"Ошибка при получении статистики трафика: {e}")
             text += "\n⚠️ _Ошибка получения статистики_\n"
+    
+    # Добавляем историю платежей по ключу
+    from database.requests import get_key_payments_history
+    payments_history = get_key_payments_history(key_id)
+    if payments_history:
+        text += "\n💳 *История платежей:*\n"
+        for p in payments_history:
+            dt = p['paid_at']
+            amount = ""
+            if p['payment_type'] == 'crypto':
+                usd = p['amount_cents'] / 100
+                usd_str = f"{usd:g}".replace('.', ',')
+                amount = f"${usd_str}"
+            elif p['payment_type'] == 'stars':
+                amount = f"{p['amount_stars']} ⭐"
+            elif p.get('payment_type') == 'cards':
+                rub = p.get('price_rub') or 0
+                rub_str = f"{rub:g}".replace('.', ',')
+                amount = f"{rub_str} ₽"
+            else:
+                amount = "?"
+            tariff_safe = escape_md(p['tariff_name'] or 'Неизвестно')
+            text += f"• `{dt}`: {amount} — {tariff_safe}\n"
+    else:
+        text += "\n💳 *История платежей:* _пусто_\n"
     
     user_telegram_id = key.get('telegram_id')
     

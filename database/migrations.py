@@ -11,7 +11,7 @@ from .connection import get_db
 logger = logging.getLogger(__name__)
 
 # Текущая версия схемы БД
-LATEST_VERSION = 4
+LATEST_VERSION = 5
 
 
 def get_current_version() -> int:
@@ -351,11 +351,36 @@ def migration_4(conn: sqlite3.Connection) -> None:
     logger.info("Миграция v4 применена")
 
 
+def migration_5(conn: sqlite3.Connection) -> None:
+    """
+    Миграция v5: Добавление протокола подключения к панели (HTTP/HTTPS).
+    
+    Изменения:
+    - Добавляет колонку protocol в таблицу servers
+    """
+    logger.info("Применение миграции v5 (Протоколы панели)...")
+
+    try:
+        conn.execute("ALTER TABLE servers ADD COLUMN protocol TEXT DEFAULT 'https'")
+        logger.info("Колонка protocol добавлена в таблицу servers")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" in str(e):
+            logger.info("Колонка protocol уже существует")
+        else:
+            raise
+    except Exception as e:
+        logger.error(f"Ошибка миграции v5: {e}")
+        raise
+
+    logger.info("Миграция v5 применена")
+
+
 MIGRATIONS = {
     1: migration_1,
     2: migration_2,
     3: migration_3,
     4: migration_4,
+    5: migration_5,
 }
 
 

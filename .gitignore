@@ -10,6 +10,7 @@ results.md
 TZ.md
 AGENTS.md
 **/__pycache__/
+.vscode
 
 # База данных (создаётся автоматически при запуске)
 database/vpn_bot.db

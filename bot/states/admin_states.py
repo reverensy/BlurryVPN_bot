@@ -18,11 +18,9 @@ class AdminStates(StatesGroup):
     
     # ========== Добавление сервера (пошаговый диалог) ==========
     add_server_name = State()        # Шаг 1: Название
-    add_server_host = State()        # Шаг 2: Хост
-    add_server_port = State()        # Шаг 3: Порт
-    add_server_path = State()        # Шаг 4: web_base_path
-    add_server_login = State()       # Шаг 5: Логин
-    add_server_password = State()    # Шаг 6: Пароль
+    add_server_url = State()         # Шаг 2: URL панели
+    add_server_login = State()       # Шаг 3: Логин
+    add_server_password = State()    # Шаг 4: Пароль
     add_server_confirm = State()     # Подтверждение после проверки
     
     # ========== Редактирование сервера ==========
@@ -98,26 +96,11 @@ SERVER_PARAMS = [
         "error": "Название должно быть минимум 2 символа"
     },
     {
-        "key": "host",
-        "label": "Хост",
-        "hint": "IP-адрес или домен (192.168.1.1 или vpn.example.com)",
-        "validate": lambda x: len(x) >= 4,
-        "error": "Введите корректный хост"
-    },
-    {
-        "key": "port",
-        "label": "Порт",
-        "hint": "обычно 2053 или 2054",
-        "validate": lambda x: x.isdigit() and 1 <= int(x) <= 65535,
-        "error": "Порт должен быть числом от 1 до 65535",
-        "convert": int
-    },
-    {
-        "key": "web_base_path",
-        "label": "Путь API",
-        "hint": "секретный путь (например: /abc123secret/)",
-        "validate": lambda x: len(x) >= 1,
-        "error": "Введите путь API"
+        "key": "panel_url",
+        "label": "URL панели",
+        "hint": "например: https://192.168.1.1:2053/secretpath/ или просто 192.168.1.1:2053",
+        "validate": lambda x: len(x.strip()) >= 5 and ":" in x,
+        "error": "Введите корректную ссылку с портом, например: https://123.45.67.89:2053/api/"
     },
     {
         "key": "login",

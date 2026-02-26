@@ -13,6 +13,7 @@ import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+import urllib.parse
 
 from config import ADMIN_IDS
 from database.requests import (
@@ -122,8 +123,7 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
     
     lines = [
         f"🖥️ *{server['name']}*\n",
-        f"📍 Хост: `{server['host']}:{server['port']}`",
-        f"🔗 API путь: `{server['web_base_path']}`",
+        f"🔗 URL панели: `{server.get('protocol', 'https')}://{server['host']}:{server['port']}{server['web_base_path']}`",
         f"👤 Логин: `{server['login']}`",
         f"🔐 Пароль: `{password_masked}`\n",
         f"📊 *Статистика:*",
@@ -236,9 +236,7 @@ async def show_server_view(callback: CallbackQuery, state: FSMContext):
 # Состояния добавления в порядке
 ADD_STATES = [
     AdminStates.add_server_name,
-    AdminStates.add_server_host,
-    AdminStates.add_server_port,
-    AdminStates.add_server_path,
+    AdminStates.add_server_url,
     AdminStates.add_server_login,
     AdminStates.add_server_password,
 ]
@@ -336,12 +334,49 @@ async def process_add_step(message: Message, state: FSMContext):
         )
         return
     
-    # Конвертация (если нужно)
-    if 'convert' in param:
-        value = param['convert'](value)
-    
-    # Сохраняем значение
-    server_data[param['key']] = value
+    # Парсинг URL
+    if param['key'] == 'panel_url':
+        url_str = value
+        if not url_str.startswith(('http://', 'https://')):
+            url_str = 'https://' + url_str
+            
+        try:
+            parsed = urllib.parse.urlparse(url_str)
+            protocol = parsed.scheme
+            host = parsed.hostname
+            if not host:
+                raise ValueError("Не удалось определить хост")
+                
+            port = parsed.port
+            if not port:
+                port = 443 if protocol == 'https' else 80
+                
+            path = parsed.path
+            if not path.endswith('/'):
+                path += '/'
+                
+            server_data['protocol'] = protocol
+            server_data['host'] = host
+            server_data['port'] = port
+            server_data['web_base_path'] = path
+            
+            # Сохраняем исходный ввод чисто для отображения на следующих шагах
+            server_data['panel_url'] = url_str
+            
+        except Exception as e:
+            await message.answer(
+                "❌ Неверный формат ссылки. Убедитесь, что указан хост и по умолчанию подставляется `https://`.\nПример: `123.45.67.89:2053/api/`",
+                parse_mode="Markdown"
+            )
+            return
+    else:
+        # Конвертация (если нужно)
+        if 'convert' in param:
+            value = param['convert'](value)
+        
+        # Сохраняем значение
+        server_data[param['key']] = value
+
     await state.update_data(server_data=server_data)
     
     # Удаляем сообщение пользователя (опционально)
@@ -407,18 +442,8 @@ async def add_server_name_handler(message: Message, state: FSMContext):
     await process_add_step(message, state)
 
 
-@router.message(AdminStates.add_server_host)
-async def add_server_host_handler(message: Message, state: FSMContext):
-    await process_add_step(message, state)
-
-
-@router.message(AdminStates.add_server_port)
-async def add_server_port_handler(message: Message, state: FSMContext):
-    await process_add_step(message, state)
-
-
-@router.message(AdminStates.add_server_path)
-async def add_server_path_handler(message: Message, state: FSMContext):
+@router.message(AdminStates.add_server_url)
+async def add_server_url_handler(message: Message, state: FSMContext):
     await process_add_step(message, state)
 
 
@@ -490,13 +515,14 @@ async def add_server_save(callback: CallbackQuery, state: FSMContext):
             port=server_data['port'],
             web_base_path=server_data['web_base_path'],
             login=server_data['login'],
-            password=server_data['password']
+            password=server_data['password'],
+            protocol=server_data.get('protocol', 'https')
         )
         
         await callback.message.edit_text(
             f"✅ *Сервер успешно добавлен!*\n\n"
             f"🖥️ {server_data['name']}\n"
-            f"📍 {server_data['host']}:{server_data['port']}",
+            f"🔗 {server_data.get('protocol', 'https')}://{server_data['host']}:{server_data['port']}{server_data['web_base_path']}",
             parse_mode="Markdown"
         )
         
@@ -527,7 +553,10 @@ def get_edit_text(server: dict, current_param: int) -> str:
     total = get_total_params()
     
     # Получаем текущее значение
-    current_value = server.get(param['key'], '')
+    if param['key'] == 'panel_url':
+        current_value = f"{server.get('protocol', 'https')}://{server.get('host', '')}:{server.get('port', '')}{server.get('web_base_path', '')}"
+    else:
+        current_value = server.get(param['key'], '')
     
     # Маскируем пароль
     if param['key'] == 'password':
@@ -649,12 +678,44 @@ async def edit_server_value(message: Message, state: FSMContext):
         )
         return
     
-    # Конвертация
-    if 'convert' in param:
-        value = param['convert'](value)
-    
-    # Сохраняем в БД
-    success = update_server_field(server_id, param['key'], value)
+    if param['key'] == 'panel_url':
+        url_str = value
+        if not url_str.startswith(('http://', 'https://')):
+            url_str = 'https://' + url_str
+            
+        try:
+            parsed = urllib.parse.urlparse(url_str)
+            protocol = parsed.scheme
+            host = parsed.hostname
+            if not host:
+                raise ValueError("Не удалось определить хост")
+                
+            port = parsed.port
+            if not port:
+                port = 443 if protocol == 'https' else 80
+                
+            path = parsed.path
+            if not path.endswith('/'):
+                path += '/'
+                
+            # Сохраняем все 4 параметра в БД
+            update_server_field(server_id, 'protocol', protocol)
+            update_server_field(server_id, 'host', host)
+            update_server_field(server_id, 'port', port)
+            success = update_server_field(server_id, 'web_base_path', path)
+        except Exception as e:
+            await message.answer(
+                "❌ Неверный формат ссылки. Убедитесь, что указан хост и по умолчанию подставляется `https://`.\nПример: `123.45.67.89:2053/api/`",
+                parse_mode="Markdown"
+            )
+            return
+    else:
+        # Конвертация
+        if 'convert' in param:
+            value = param['convert'](value)
+        
+        # Сохраняем в БД
+        success = update_server_field(server_id, param['key'], value)
     
     if not success:
         await message.answer("❌ Ошибка сохранения")
@@ -754,7 +815,7 @@ async def confirm_delete_server(callback: CallbackQuery, state: FSMContext):
         f"🗑️ *Удаление сервера*\n\n"
         f"Вы уверены, что хотите удалить сервер?\n\n"
         f"🖥️ *{server['name']}*\n"
-        f"📍 {server['host']}:{server['port']}\n\n"
+        f"🔗 `{server.get('protocol', 'https')}://{server['host']}:{server['port']}{server['web_base_path']}`\n\n"
         f"⚠️ _Это действие нельзя отменить!_",
         reply_markup=confirm_delete_kb(server_id),
         parse_mode="Markdown"

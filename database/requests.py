@@ -25,7 +25,7 @@ def get_all_servers() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
             FROM servers
             ORDER BY id
         """)
@@ -44,7 +44,7 @@ def get_server_by_id(server_id: int) -> Optional[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
             FROM servers
             WHERE id = ?
         """, (server_id,))
@@ -61,7 +61,7 @@ def get_active_servers() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
             FROM servers
             WHERE is_active = 1
             ORDER BY id
@@ -75,7 +75,8 @@ def add_server(
     port: int,
     web_base_path: str,
     login: str,
-    password: str
+    password: str,
+    protocol: str = 'https'
 ) -> int:
     """
     Добавляет новый VPN-сервер.
@@ -87,15 +88,16 @@ def add_server(
         web_base_path: Секретный путь API
         login: Логин для панели
         password: Пароль для панели
+        protocol: Протокол подключения (http/https)
         
     Returns:
         ID созданного сервера
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            INSERT INTO servers (name, host, port, web_base_path, login, password, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, 1)
-        """, (name, host, port, web_base_path, login, password))
+            INSERT INTO servers (name, host, port, web_base_path, login, password, is_active, protocol)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        """, (name, host, port, web_base_path, login, password, protocol))
         server_id = cursor.lastrowid
         logger.info(f"Добавлен сервер: {name} (ID: {server_id})")
         return server_id
@@ -107,12 +109,12 @@ def update_server(server_id: int, **fields) -> bool:
     
     Args:
         server_id: ID сервера
-        **fields: Поля для обновления (name, host, port, web_base_path, login, password)
+        **fields: Поля для обновления (name, host, port, web_base_path, login, password, protocol)
         
     Returns:
         True если обновление успешно
     """
-    allowed_fields = {'name', 'host', 'port', 'web_base_path', 'login', 'password', 'is_active'}
+    allowed_fields = {'name', 'host', 'port', 'web_base_path', 'login', 'password', 'is_active', 'protocol'}
     fields = {k: v for k, v in fields.items() if k in allowed_fields}
     
     if not fields:
@@ -1034,11 +1036,13 @@ def get_user_payments_stats(user_id: int) -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as total_payments,
-                COALESCE(SUM(amount_cents), 0) as total_amount_cents,
-                COALESCE(SUM(amount_stars), 0) as total_amount_stars,
+                COALESCE(SUM(CASE WHEN payment_type = 'crypto' THEN amount_cents ELSE 0 END), 0) as total_amount_cents,
+                COALESCE(SUM(CASE WHEN payment_type = 'stars' THEN amount_stars ELSE 0 END), 0) as total_amount_stars,
+                COALESCE(SUM(CASE WHEN payment_type = 'cards' THEN t.price_rub ELSE 0 END), 0) as total_amount_rub,
                 MAX(paid_at) as last_payment_at
-            FROM payments
-            WHERE user_id = ? AND status = 'paid'
+            FROM payments p
+            LEFT JOIN tariffs t ON p.tariff_id = t.id
+            WHERE p.user_id = ? AND p.status = 'paid'
         """, (user_id,))
         stats = dict(cursor.fetchone())
         
@@ -1223,16 +1227,55 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         stars_row = cursor.fetchone()
         
-        paid_count = (crypto_row['count'] if crypto_row else 0) + (stars_row['count'] if stars_row else 0)
+        # 3. Считаем Карты (Cards - Рубли)
+        cursor = conn.execute("""
+            SELECT 
+                COUNT(*) as count,
+                COALESCE(SUM(t.price_rub), 0) as total_rub
+            FROM payments p
+            LEFT JOIN tariffs t ON p.tariff_id = t.id
+            WHERE p.status = 'paid' 
+            AND p.payment_type = 'cards'
+            AND p.paid_at >= datetime('now', '-1 day')
+        """)
+        cards_row = cursor.fetchone()
+        
+        paid_count = (crypto_row['count'] if crypto_row else 0) + \
+                     (stars_row['count'] if stars_row else 0) + \
+                     (cards_row['count'] if cards_row else 0)
         total_cents = crypto_row['total_cents'] if crypto_row else 0
         total_stars = stars_row['total_stars'] if stars_row else 0
+        total_rub = cards_row['total_rub'] if cards_row else 0
         
         return {
             'paid_count': paid_count,
             'paid_cents': total_cents,
             'paid_stars': total_stars,
+            'paid_rub': total_rub,
             'pending_count': 0 
         }
+
+def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
+    """
+    Получает историю платежей по конкретному ключу.
+    
+    Args:
+        key_id: ID ключа
+    
+    Returns:
+        Список платежей, отсортированный по дате (по убыванию).
+    """
+    with get_db() as conn:
+        cursor = conn.execute("""
+            SELECT 
+                p.id, p.paid_at, p.payment_type, p.amount_cents, p.amount_stars,
+                t.name as tariff_name, t.price_rub
+            FROM payments p
+            LEFT JOIN tariffs t ON p.tariff_id = t.id
+            WHERE p.vpn_key_id = ? AND p.status = 'paid'
+            ORDER BY p.paid_at DESC
+        """, (key_id,))
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def get_keys_stats() -> Dict[str, int]:

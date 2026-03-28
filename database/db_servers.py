@@ -28,7 +28,7 @@ def get_all_servers() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, group_id
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
             FROM servers
             ORDER BY id
         """)
@@ -46,7 +46,7 @@ def get_server_by_id(server_id: int) -> Optional[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, group_id
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
             FROM servers
             WHERE id = ?
         """, (server_id,))
@@ -62,7 +62,7 @@ def get_active_servers() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, group_id
+            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol
             FROM servers
             WHERE is_active = 1
             ORDER BY id
@@ -97,9 +97,9 @@ def add_server(
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            INSERT INTO servers (name, host, port, web_base_path, login, password, is_active, protocol, group_id)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-        """, (name, host, port, web_base_path, login, password, protocol, group_id))
+            INSERT INTO servers (name, host, port, web_base_path, login, password, is_active, protocol)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        """, (name, host, port, web_base_path, login, password, protocol))
         server_id = cursor.lastrowid
         
         # Добавляем сервер в таблицу связей server_groups
@@ -122,7 +122,7 @@ def update_server(server_id: int, **fields) -> bool:
     Returns:
         True если обновление успешно
     """
-    allowed_fields = {'name', 'host', 'port', 'web_base_path', 'login', 'password', 'is_active', 'protocol', 'group_id'}
+    allowed_fields = {'name', 'host', 'port', 'web_base_path', 'login', 'password', 'is_active', 'protocol'}
     fields = {k: v for k, v in fields.items() if k in allowed_fields}
     
     if not fields:

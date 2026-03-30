@@ -16,6 +16,7 @@ def users_menu_kb(stats: Dict[str, int]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=f"📋 Все пользователи ({stats.get('total', 0)})", callback_data='admin_users_list'))
     builder.row(InlineKeyboardButton(text='🔍 Выбрать пользователя', callback_data='admin_users_select'))
+    builder.row(InlineKeyboardButton(text='🔄 Синхронизировать ключи с панелью', callback_data='admin_sync_keys'))
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
 
@@ -86,7 +87,7 @@ def user_view_kb(telegram_id: int, vpn_keys: List[Dict[str, Any]], is_banned: bo
     builder.row(InlineKeyboardButton(text='➕ Добавить ключ', callback_data=f'admin_user_add_key:{telegram_id}'))
     balance_rub = balance_cents / 100
     builder.row(InlineKeyboardButton(text=f'💰 Баланс: {balance_rub:.2f} ₽', callback_data=f'admin_user_balance:{telegram_id}'), InlineKeyboardButton(text='➕ Пополнить', callback_data=f'admin_user_balance_add:{telegram_id}'), InlineKeyboardButton(text='➖ Списать', callback_data=f'admin_user_balance_deduct:{telegram_id}'))
-    builder.row(InlineKeyboardButton(text=f'📊 Коэффициент: {referral_coefficient}x', callback_data=f'admin_user_coefficient:{telegram_id}'))
+    builder.row(InlineKeyboardButton(text=f'📊 Реферальный коэффициент: {referral_coefficient}x', callback_data=f'admin_user_coefficient:{telegram_id}'))
     if is_banned:
         ban_text = '✅ Разблокировать'
     else:

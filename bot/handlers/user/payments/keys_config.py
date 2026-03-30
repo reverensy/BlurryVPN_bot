@@ -77,7 +77,6 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
     from bot.handlers.admin.users_keys import generate_unique_email
     from bot.utils.key_sender import send_key_with_qr
     from bot.keyboards.user import key_issued_kb
-    from config import DEFAULT_TOTAL_GB
     data = await state.get_data()
     order_id = data.get('new_key_order_id')
     key_id = data.get('new_key_id')
@@ -112,8 +111,7 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
         # Лимит трафика из тарифа (0 = безлимит на панели)
         from database.requests import get_tariff_by_id as _get_tariff_for_limit
         _tariff_data = _get_tariff_for_limit(order['tariff_id'])
-        tariff_traffic_gb = (_tariff_data.get('traffic_limit_gb', 0) or 0) if _tariff_data else 0
-        limit_gb = tariff_traffic_gb if tariff_traffic_gb > 0 else int(DEFAULT_TOTAL_GB / 1024 ** 3)
+        limit_gb = (_tariff_data.get('traffic_limit_gb', 0) or 0) if _tariff_data else 0
         flow = await client.get_inbound_flow(inbound_id)
         res = await client.add_client(inbound_id=inbound_id, email=panel_email, total_gb=limit_gb, expire_days=days, limit_ip=1, enable=True, tg_id=str(telegram_id), flow=flow)
         client_uuid = res['uuid']

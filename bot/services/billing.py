@@ -192,10 +192,11 @@ async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict
         if days and extend_vpn_key(order['vpn_key_id'], days):
             logger.info(f"Ключ {order['vpn_key_id']} продлён на {days} дней (order={order_id})")
             
-            from bot.services.vpn_api import reset_key_traffic_if_active, extend_key_on_server, restore_key_traffic_limit
-            await reset_key_traffic_if_active(order['vpn_key_id'])
-            await extend_key_on_server(order['vpn_key_id'], days)
-            await restore_key_traffic_limit(order['vpn_key_id'])
+            from bot.services.vpn_api import push_key_to_panel, restore_traffic_limit_in_db
+            # Восстанавливаем лимит трафика в БД (без обращения к панели)
+            restore_traffic_limit_in_db(order['vpn_key_id'])
+            # Пушим ВСЕ данные из БД на панель одним вызовом (сброс up/down + обновление)
+            await push_key_to_panel(order['vpn_key_id'], reset_traffic=True)
             
             if order.get('payment_type') == 'crypto':
                 await process_referral_reward(user_internal_id, days, order.get('amount_cents', 0), 'crypto')

@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import json
 import logging
 import os
 import zipfile
@@ -483,12 +484,10 @@ TRAFFIC_THRESHOLDS = [10, 5, 3, 2, 1, 0]
 
 async def monthly_traffic_reset(bot: Bot) -> None:
     """
-    Ежемесячный сброс трафика (1-е число каждого месяца).
+    Ежемесячные задачи (1-е число каждого месяца):
     
-    Проверяет настройку monthly_traffic_reset_enabled.
-    Сбрасывает счётчики up/down на серверах, восстанавливает полный лимит,
-    обнуляет traffic_used и traffic_notified_pct в БД.
-    Отправляет отчёт админам.
+    1. Сброс трафика (если monthly_traffic_reset_enabled = 1)
+    2. Сверка БД и панели (ВСЕГДА) — исправление расхождений expiryTime и totalGB
     
     Args:
         bot: Экземпляр бота
@@ -499,110 +498,135 @@ async def monthly_traffic_reset(bot: Bot) -> None:
         update_key_traffic_limit,
         get_tariff_by_id
     )
+    from bot.services.vpn_api import push_key_to_panel
     
-    # Проверяем настройку
-    if get_setting('monthly_traffic_reset_enabled', '0') != '1':
+    reset_enabled = get_setting('monthly_traffic_reset_enabled', '0') == '1'
+    
+    # === ЧАСТЬ 1: Сброс трафика (если включён) ===
+    reset_success = 0
+    reset_errors = 0
+    
+    if reset_enabled:
+        logger.info("🔄 Запуск ежемесячного сброса трафика...")
+        keys = get_all_active_keys_with_server()
+        keys_with_limit = [k for k in keys if (k.get('traffic_limit', 0) or 0) > 0] if keys else []
+        
+        for key in keys_with_limit:
+            try:
+                tariff_limit = key.get('traffic_limit', 0) or 0
+                tariff_id = key.get('tariff_id')
+                if tariff_id:
+                    tariff = get_tariff_by_id(tariff_id)
+                    if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
+                        tariff_limit = tariff['traffic_limit_gb'] * (1024**3)
+                
+                # Обновляем БД
+                update_key_traffic_limit(key['id'], tariff_limit)
+                reset_key_traffic_notification(key['id'])
+                
+                # Пушим на панель (сброс up/down + правильные данные из БД)
+                await push_key_to_panel(key['id'], reset_traffic=True)
+                reset_success += 1
+            except Exception as e:
+                reset_errors += 1
+                logger.error(f"Ошибка сброса трафика для ключа {key['id']}: {e}")
+    else:
         logger.info("🔄 Ежемесячный сброс трафика отключён")
-        return
     
-    logger.info("🔄 Запуск ежемесячного сброса трафика...")
+    # === ЧАСТЬ 2: Сверка БД↔панель (ВСЕГДА) ===
+    logger.info("🔍 Запуск ежемесячной сверки БД↔панель...")
+    sync_fixed = 0
+    sync_errors = 0
     
-    keys = get_all_active_keys_with_server()
-    if not keys:
-        logger.info("🔄 Нет активных ключей для сброса")
-        return
-    
-    # Фильтруем ключи с лимитом трафика
-    keys_with_limit = [k for k in keys if (k.get('traffic_limit', 0) or 0) > 0]
-    
-    if not keys_with_limit:
-        logger.info("🔄 Нет ключей с лимитом трафика")
-        return
-    
-    # Группируем по серверам
-    keys_by_server: dict = {}
-    for key in keys_with_limit:
-        sid = key['server_id']
-        if sid not in keys_by_server:
-            keys_by_server[sid] = []
-        keys_by_server[sid].append(key)
-    
-    servers = get_all_servers()
-    server_map = {s['id']: s for s in servers}
-    
-    success_count = 0
-    error_count = 0
-    
-    for server_id, server_keys in keys_by_server.items():
-        server = server_map.get(server_id)
-        if not server or not server.get('is_active'):
-            continue
+    all_keys = get_all_active_keys_with_server()
+    if all_keys:
+        keys_by_server: dict = {}
+        for key in all_keys:
+            sid = key['server_id']
+            if sid not in keys_by_server:
+                keys_by_server[sid] = []
+            keys_by_server[sid].append(key)
         
-        try:
-            client = get_client_from_server_data(server)
-            
-            for key in server_keys:
-                email = key.get('panel_email')
-                inbound_id = key.get('panel_inbound_id')
-                client_uuid = key.get('client_uuid')
-                traffic_limit = key.get('traffic_limit', 0) or 0
-                
-                if not email or not inbound_id or not client_uuid:
-                    logger.warning(f"Ключ ID {key['id']}: нет данных для сброса (email={email}, inbound={inbound_id})")
-                    continue
-                
-                try:
-                    # 1. Сброс счётчиков up/down на сервере
-                    await client.reset_client_traffic(inbound_id, email)
-                    
-                    # 2. Восстановление полного лимита тарифа
-                    # Берём лимит из тарифа, а не из ключа (ключ мог быть уменьшен при замене)
-                    tariff_limit = traffic_limit
-                    tariff_id = key.get('tariff_id')
-                    if tariff_id:
-                        tariff = get_tariff_by_id(tariff_id)
-                        if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
-                            tariff_limit = tariff['traffic_limit_gb'] * (1024**3)
-                    
-                    await client.update_client_limit(
-                        inbound_id=inbound_id,
-                        client_uuid=client_uuid,
-                        email=email,
-                        total_gb_bytes=tariff_limit
-                    )
-                    
-                    # 3. Обнуление в БД
-                    update_key_traffic_limit(key['id'], tariff_limit)
-                    reset_key_traffic_notification(key['id'])
-                    
-                    success_count += 1
-                    
-                except Exception as e:
-                    error_count += 1
-                    logger.error(f"Ошибка сброса трафика для ключа {key['id']} ({email}): {e}")
+        servers = get_all_servers()
+        server_map = {s['id']: s for s in servers}
         
-        except Exception as e:
-            error_count += len(server_keys)
-            logger.error(f"Ошибка подключения к серверу {server.get('name', server_id)} при сбросе трафика: {e}")
+        for server_id, server_keys in keys_by_server.items():
+            server = server_map.get(server_id)
+            if not server or not server.get('is_active'):
+                continue
+            try:
+                client = get_client_from_server_data(server)
+                inbounds = await client.get_inbounds()
+                
+                # Карта email → данные на панели
+                panel_map = {}
+                for inbound in inbounds:
+                    settings = json.loads(inbound.get('settings', '{}'))
+                    for cl in settings.get('clients', []):
+                        panel_map[cl.get('email', '')] = {
+                            'expiryTime': cl.get('expiryTime', 0),
+                            'totalGB': cl.get('totalGB', 0)
+                        }
+                
+                for key in server_keys:
+                    email = key.get('panel_email')
+                    if not email or email not in panel_map:
+                        continue
+                    
+                    panel = panel_map[email]
+                    needs_fix = False
+                    
+                    # Проверяем expiryTime
+                    expires_at = key.get('expires_at')
+                    if expires_at:
+                        dt = datetime.fromisoformat(str(expires_at))
+                        expected_ms = int(dt.timestamp() * 1000)
+                        panel_ms = panel['expiryTime']
+                        # Расхождение > 1 день
+                        if panel_ms > 0 and abs(expected_ms - panel_ms) > 86400 * 1000:
+                            needs_fix = True
+                        elif panel_ms == 0 and expected_ms > 0:
+                            needs_fix = True
+                    
+                    # Проверяем totalGB
+                    traffic_limit = key.get('traffic_limit', 0) or 0
+                    panel_total = panel['totalGB']
+                    if traffic_limit > 0 and (panel_total == 0 or abs(panel_total - traffic_limit) > 1024**3):
+                        needs_fix = True
+                    elif traffic_limit == 0 and panel_total > 0:
+                        needs_fix = True
+                    
+                    if needs_fix:
+                        # Пропускаем те, что уже обновились при сбросе трафика
+                        already_pushed = reset_enabled and (traffic_limit > 0)
+                        if not already_pushed:
+                            try:
+                                await push_key_to_panel(key['id'])
+                                sync_fixed += 1
+                            except Exception as e:
+                                sync_errors += 1
+                                logger.error(f"Ошибка сверки ключа {key['id']} ({email}): {e}")
+                        else:
+                            sync_fixed += 1  # Уже исправлен при сбросе
+            except Exception as e:
+                logger.error(f"Ошибка сверки сервера {server.get('name', server_id)}: {e}")
     
-    # Отчёт админам
-    month_name = datetime.now().strftime('%B %Y')
-    report = (
-        f"🔄 *Ежемесячный сброс трафика*\n\n"
-        f"✅ Успешно: {success_count}\n"
-    )
-    if error_count > 0:
-        report += f"❌ Ошибок: {error_count}\n"
-    report += f"\nВсего ключей с лимитом: {len(keys_with_limit)}"
+    # === Отчёт админам ===
+    report_parts = ["🔄 *Ежемесячное обслуживание*\n"]
+    if reset_enabled:
+        report_parts.append(f"📊 *Сброс трафика:* ✅ {reset_success}")
+        if reset_errors > 0:
+            report_parts.append(f"  ❌ Ошибок: {reset_errors}")
+    report_parts.append(f"🔍 *Сверка БД↔панель:* 🔧 {sync_fixed}")
+    if sync_errors > 0:
+        report_parts.append(f"  ❌ Ошибок: {sync_errors}")
     
+    report = "\n".join(report_parts)
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(chat_id=admin_id, text=report, parse_mode="Markdown")
         except Exception as e:
-            logger.warning(f"Не удалось отправить отчёт о сбросе админу {admin_id}: {e}")
-    
-    logger.info(f"✅ Ежемесячный сброс трафика завершён: {success_count} успешно, {error_count} ошибок")
-
+            logger.warning(f"Не удалось отправить отчёт админу {admin_id}: {e}")
 
 async def sync_traffic_stats(bot: Bot) -> None:
     """

@@ -235,4 +235,130 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     return True
 
 
-__all__ = ["VPNAPIError", "get_client_from_server_data", "invalidate_client_cache", "format_traffic", "close_all_clients", "get_client", "test_server_connection", "reset_key_traffic_if_active", "extend_key_on_server", "restore_key_traffic_limit"]
+async def push_key_to_panel(key_id: int, reset_traffic: bool = False) -> bool:
+    """
+    Пушит данные ключа из нашей БД на панель 3X-UI.
+    
+    Единственная точка записи на панель. Все данные (expiryTime, totalGB)
+    формируются из нашей БД, а не читаются с панели.
+    
+    Args:
+        key_id: ID ключа в нашей БД
+        reset_traffic: True = обнулить счётчики up/down на панели перед обновлением
+        
+    Returns:
+        True при успешном обновлении, False при ошибке
+    """
+    from database.requests import get_vpn_key_by_id
+    from datetime import datetime
+    
+    key = get_vpn_key_by_id(key_id)
+    if not key or not key.get('server_active'):
+        logger.warning(f'push_key_to_panel: ключ {key_id} не найден или сервер неактивен')
+        return False
+    
+    email = key.get('panel_email')
+    inbound_id = key.get('panel_inbound_id')
+    client_uuid = key.get('client_uuid')
+    
+    if not email or not inbound_id or not client_uuid:
+        logger.warning(f'push_key_to_panel: ключ {key_id} — неполные данные панели')
+        return False
+    
+    # Конвертируем expires_at из БД → expiryTime (ms)
+    expires_at = key.get('expires_at')
+    if expires_at:
+        dt = datetime.fromisoformat(str(expires_at))
+        expiry_time_ms = int(dt.timestamp() * 1000)
+    else:
+        expiry_time_ms = 0  # Бессрочный
+    
+    # Лимит трафика из БД (уже в байтах)
+    traffic_limit = key.get('traffic_limit', 0) or 0
+    
+    try:
+        server_data = {
+            'id': key.get('server_id'),
+            'name': key.get('server_name'),
+            'host': key.get('host'),
+            'port': key.get('port'),
+            'web_base_path': key.get('web_base_path'),
+            'login': key.get('login'),
+            'password': key.get('password')
+        }
+        client = get_client_from_server_data(server_data)
+        
+        # Сброс счётчиков up/down на панели (если требуется)
+        if reset_traffic:
+            await client.reset_client_traffic(inbound_id, email)
+            logger.info(f'Сброшены счётчики трафика ключа {key_id} на панели')
+        
+        # Обновляем ВСЕ данные клиента на панели из нашей БД
+        success = await client.update_client_full(
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            email=email,
+            expiry_time_ms=expiry_time_ms,
+            total_gb_bytes=traffic_limit
+        )
+        
+        if success:
+            logger.info(f'Данные ключа {key_id} ({email}) успешно запушены на панель')
+        return success
+        
+    except Exception as e:
+        logger.error(f'Ошибка пуша ключа {key_id} на панель: {e}')
+        return False
+
+
+def restore_traffic_limit_in_db(key_id: int) -> bool:
+    """
+    Восстанавливает полный лимит трафика тарифа в нашей БД.
+    НЕ обращается к панели! Панель обновляется через push_key_to_panel.
+    
+    Делает:
+    1. Получает лимит из тарифа ключа
+    2. Обновляет traffic_limit в БД
+    3. Обнуляет traffic_used и сбрасывает пороги уведомлений
+    
+    Args:
+        key_id: ID ключа
+        
+    Returns:
+        True при успехе
+    """
+    from database.requests import (
+        get_vpn_key_by_id, get_tariff_by_id,
+        reset_key_traffic_notification, update_key_traffic_limit
+    )
+    
+    key = get_vpn_key_by_id(key_id)
+    if not key:
+        return False
+    
+    # Получаем лимит из тарифа
+    tariff_id = key.get('tariff_id')
+    traffic_limit = key.get('traffic_limit', 0) or 0
+    
+    if tariff_id:
+        tariff = get_tariff_by_id(tariff_id)
+        if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
+            traffic_limit = tariff['traffic_limit_gb'] * (1024**3)
+    
+    # Обнуляем traffic_used и пороги уведомлений
+    reset_key_traffic_notification(key_id)
+    
+    # Обновляем traffic_limit (на случай если тариф менялся)
+    if traffic_limit > 0:
+        update_key_traffic_limit(key_id, traffic_limit)
+    
+    logger.info(f'Лимит трафика ключа {key_id} восстановлен в БД: {traffic_limit / 1024**3:.1f} ГБ')
+    return True
+
+
+__all__ = [
+    "VPNAPIError", "get_client_from_server_data", "invalidate_client_cache",
+    "format_traffic", "close_all_clients", "get_client", "test_server_connection",
+    "reset_key_traffic_if_active", "extend_key_on_server", "restore_key_traffic_limit",
+    "push_key_to_panel", "restore_traffic_limit_in_db"
+]

@@ -84,6 +84,8 @@ async def get_admin_stats_text() -> str:
     return "\n".join(lines)
 
 
+from aiogram.exceptions import TelegramBadRequest
+
 @router.callback_query(F.data == "admin_panel")
 async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
     """Показывает главное меню админ-панели."""
@@ -96,11 +98,15 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
     
     text = await get_admin_stats_text()
     
-    await callback.message.edit_text(
-        text,
-        reply_markup=admin_main_menu_kb(),
-        parse_mode="Markdown"
-    )
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=admin_main_menu_kb(),
+            parse_mode="Markdown"
+        )
+    except TelegramBadRequest as e:
+        if "is not modified" not in str(e):
+            logger.error(f"Ошибка при обновлении меню: {e}")
 
 
 # ============================================================================

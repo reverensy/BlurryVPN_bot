@@ -145,7 +145,7 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
     """
     from database.requests import get_user_internal_id, get_user_balance, deduct_from_balance, get_tariff_by_id, get_or_create_user, create_initial_vpn_key, extend_vpn_key
     from bot.services.user_locks import user_locks
-    from bot.services.vpn_api import reset_key_traffic_if_active, extend_key_on_server
+    from bot.services.vpn_api import push_key_to_panel, restore_traffic_limit_in_db
     data = await state.get_data()
     balance_to_deduct = data.get('balance_to_deduct', 0)
     tariff_price_cents = data.get('tariff_price_cents', 0)
@@ -176,15 +176,15 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
         deduct_from_balance(user_internal_id, actual_deduct)
         if key_id:
             extend_vpn_key(key_id, days)
-            await reset_key_traffic_if_active(key_id)
-            await extend_key_on_server(key_id, days)
-            from bot.services.vpn_api import restore_key_traffic_limit
-            await restore_key_traffic_limit(key_id)
+            # Восстанавливаем лимит трафика в БД
+            restore_traffic_limit_in_db(key_id)
+            # Пушим ВСЕ данные из БД на панель (сброс up/down + обновление)
+            await push_key_to_panel(key_id, reset_traffic=True)
             logger.info(f'Ключ {key_id} продлён на {days} дней за баланс {actual_deduct} коп')
         else:
             traffic_limit_bytes = (tariff.get('traffic_limit_gb', 0) or 0) * 1024 ** 3
-            create_initial_vpn_key(user_internal_id, tariff_id, days, traffic_limit=traffic_limit_bytes)
-            logger.info(f'Создан черновик ключа для user {user_internal_id} за баланс {actual_deduct} коп')
+            new_key_id = create_initial_vpn_key(user_internal_id, tariff_id, days, traffic_limit=traffic_limit_bytes)
+            logger.info(f'Создан черновик ключа {new_key_id} для user {user_internal_id} за баланс {actual_deduct} коп')
     await state.update_data(balance_to_deduct=0)
 
     def format_price_compact(cents: int) -> str:
@@ -193,7 +193,19 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
         else:
             return f'{cents / 100:.2f} ₽'.replace('.', ',')
     price_str = format_price_compact(actual_deduct)
-    await callback.message.edit_text(f'✅ *Оплата успешно завершена!*\n\nС вашего баланса списано {price_str}\nКлюч активирован.', parse_mode='Markdown', reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text='🈴 На главную', callback_data='start')).as_markup())
+    
+    if key_id:
+        # Продление — ключ уже на сервере, просто сообщаем
+        await callback.message.edit_text(f'✅ *Оплата успешно завершена!*\n\nС вашего баланса списано {price_str}\nКлюч продлён на {days} дн.', parse_mode='Markdown', reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text='🈴 На главную', callback_data='start')).as_markup())
+    else:
+        # Новый ключ — нужно настроить (выбор сервера/inbound)
+        from bot.handlers.user.payments.base import finalize_payment_ui
+        from database.requests import create_pending_order, update_payment_key_id
+        # Создаём ордер для корректной работы finalize_payment_ui
+        (_, order_id) = create_pending_order(user_id=user_internal_id, tariff_id=tariff_id, payment_type='balance', vpn_key_id=new_key_id)
+        update_payment_key_id(order_id, new_key_id)
+        order = {'order_id': order_id, 'vpn_key_id': new_key_id, 'tariff_id': tariff_id}
+        await finalize_payment_ui(callback.message, state, f'✅ *Оплата успешно завершена!*\n\nС вашего баланса списано {price_str}', order, user_id=telegram_id)
     await callback.answer()
 
 @router.callback_query(F.data.startswith('pay_card_balance:'))

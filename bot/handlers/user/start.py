@@ -55,6 +55,15 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     username = message.from_user.username
     logger.info(f'CMD_START: User {user_id} started bot')
     await state.clear()
+    
+    # Удаляем Reply-клавиатуру, если она "застряла" от предыдущих стейтов
+    from aiogram.types import ReplyKeyboardRemove
+    try:
+        temp_msg = await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
+        await temp_msg.delete()
+    except Exception:
+        pass
+
     (user, is_new) = get_or_create_user(user_id, username)
     if user.get('is_banned'):
         await message.answer('⛔ *Доступ заблокирован*\n\nВаш аккаунт заблокирован. Обратитесь в поддержку.', parse_mode='Markdown')

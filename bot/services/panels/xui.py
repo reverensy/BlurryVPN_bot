@@ -541,24 +541,8 @@ class XUIClient(BaseVPNClient):
         encoded_uuid = urllib.parse.quote(client_uuid, safe='')
         await self._request("POST", f"/panel/api/inbounds/{inbound_id}/delClient/{encoded_uuid}")
         return True
-    
-    async def reset_client_traffic(self, inbound_id: int, email: str) -> bool:
-        """
-        Сбрасывает счётчик трафика клиента.
-        
-        Args:
-            inbound_id: ID inbound-подключения
-            email: Email/идентификатор клиента
-            
-        Returns:
-            True при успешном сбросе
-        """
-        import urllib.parse
-        encoded_email = urllib.parse.quote(email, safe='')
-        await self._request("POST", f"/panel/api/inbounds/{inbound_id}/resetClientTraffic/{encoded_email}")
-        logger.info(f"Сброшен трафик клиента {email} в inbound {inbound_id}")
-        return True
-    
+
+
     async def update_client_traffic_limit(
         self,
         inbound_id: int,
@@ -690,6 +674,83 @@ class XUIClient(BaseVPNClient):
                             logger.error(f"Ошибка при отключении автопродления для клиента {client.get('email', client_id)}: {e}")
                             
         return updated_count
+
+    async def update_client_full(
+        self,
+        inbound_id: int,
+        client_uuid: str,
+        email: str,
+        expiry_time_ms: int,
+        total_gb_bytes: int
+    ) -> bool:
+        """
+        Обновляет ВСЕ параметры клиента на панели данными из нашей БД.
+        Единственная функция записи на панель (кроме создания/удаления).
+        
+        Протокольные поля (flow, subId, limitIp, tgId) читаются с панели,
+        но expiryTime и totalGB ВСЕГДА берутся из параметров (из нашей БД).
+        
+        Args:
+            inbound_id: ID inbound-подключения
+            client_uuid: UUID клиента
+            email: Email/идентификатор клиента
+            expiry_time_ms: Срок действия в миллисекундах (из нашей БД, 0 = бессрочный)
+            total_gb_bytes: Лимит трафика в байтах (из нашей БД, 0 = безлимит)
+            
+        Returns:
+            True при успешном обновлении
+        """
+        # Читаем текущие данные клиента с панели — только для протокольных полей
+        inbounds = await self.get_inbounds()
+        target_client = None
+        
+        for inbound in inbounds:
+            if inbound.get('id') == inbound_id:
+                settings = json.loads(inbound.get('settings', '{}'))
+                clients = settings.get('clients', [])
+                
+                for client in clients:
+                    if client.get('id') == client_uuid or client.get('password') == client_uuid:
+                        target_client = client
+                        break
+                break
+        
+        if not target_client:
+            raise VPNAPIError(f"Клиент {email} не найден в inbound {inbound_id}")
+        
+        # Формируем данные: expiryTime и totalGB из ПАРАМЕТРОВ (нашей БД),
+        # остальное — из текущих данных клиента на панели
+        updated_client = {
+            "id": target_client.get('id', ''),
+            "password": target_client.get('password', ''),
+            "flow": target_client.get('flow', ''),
+            "email": target_client.get('email', email),
+            "limitIp": target_client.get('limitIp', 1),
+            "totalGB": total_gb_bytes,          # ← Из нашей БД!
+            "expiryTime": expiry_time_ms,        # ← Из нашей БД!
+            "enable": target_client.get('enable', True),
+            "tgId": target_client.get('tgId', ''),
+            "subId": target_client.get('subId', ''),
+            "reset": 0  # Не используем auto-reset панели
+        }
+        
+        # Удаляем пустые строковые поля (для разных протоколов)
+        updated_client = {k: v for k, v in updated_client.items() if v != ''}
+        
+        update_data = {
+            "id": inbound_id,
+            "settings": json.dumps({"clients": [updated_client]})
+        }
+        
+        import urllib.parse
+        encoded_uuid = urllib.parse.quote(client_uuid, safe='')
+        await self._request("POST", f"/panel/api/inbounds/updateClient/{encoded_uuid}", data=update_data)
+        
+        from datetime import datetime
+        expiry_str = datetime.fromtimestamp(expiry_time_ms / 1000).strftime('%Y-%m-%d %H:%M') if expiry_time_ms > 0 else '∞'
+        limit_str = f"{total_gb_bytes / 1024**3:.1f} ГБ" if total_gb_bytes > 0 else '∞'
+        logger.info(f"Обновлён клиент {email}: expiry={expiry_str}, limit={limit_str}")
+        return True
 
     async def extend_client_expiry(
         self,

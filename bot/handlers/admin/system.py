@@ -10,6 +10,7 @@ import sys
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
 
 from config import GITHUB_REPO_URL
 from bot.utils.admin import is_admin
@@ -80,7 +81,50 @@ async def show_bot_settings(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# ОБНОВЛЕНИЕ БОТА
+# РУЧНОЕ ОБНОВЛЕНИЕ БОТА (КОМАНДОЙ /UPDATE)
+# ============================================================================
+
+@router.message(Command("update"))
+async def admin_update_cmd(message: Message, state: FSMContext):
+    """Скрытая команда экстренного обновления для администраторов."""
+    if not is_admin(message.from_user.id):
+        return
+        
+    # Проверяем и обновляем remote URL если нужно
+    current_remote = get_remote_url()
+    if current_remote != GITHUB_REPO_URL and GITHUB_REPO_URL:
+        set_remote_url(GITHUB_REPO_URL)
+        
+    await message.answer(
+        "🔄 *Экстренное обновление...*\n\n"
+        "Загружаю изменения с GitHub...",
+        parse_mode="Markdown"
+    )
+    
+    success, log_message = pull_updates()
+    
+    if not success:
+        await message.answer(
+            f"❌ *Ошибка обновления*\n\n{log_message}",
+            parse_mode="Markdown"
+        )
+        return
+        
+    logger.info(f"🔄 Бот экстренно обновлён администратором {message.from_user.id} через команду /update")
+    
+    await message.answer(
+        f"✅ *Обновление завершено!*\n\n{log_message}\n\n"
+        "🔄 Перезапуск бота через 2 секунды...",
+        parse_mode="Markdown"
+    )
+    
+    await state.clear()
+    await asyncio.sleep(2)
+    restart_bot()
+
+
+# ============================================================================
+# ОБНОВЛЕНИЕ БОТА (ИНТЕРФЕЙС)
 # ============================================================================
 
 @router.callback_query(F.data == "admin_update_bot")

@@ -356,7 +356,6 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
     from bot.handlers.admin.users_keys import generate_unique_email
     from bot.utils.key_sender import send_key_with_qr
     from bot.keyboards.user import key_issued_kb
-    from config import DEFAULT_TOTAL_GB
     data = await state.get_data()
     key_id = data.get('replace_key_id')
     new_server_id = data.get('replace_server_id')
@@ -396,7 +395,7 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
             limit_gb = max(1, int(remaining_bytes / 1024 ** 3))
         else:
             remaining_bytes = 0
-            limit_gb = int(DEFAULT_TOTAL_GB / 1024 ** 3)
+            limit_gb = 0
         expires_at = datetime.fromisoformat(current_key['expires_at'])
         now = datetime.now()
         delta = expires_at - now

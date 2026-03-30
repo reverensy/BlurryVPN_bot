@@ -106,7 +106,7 @@ async def start_key_extend(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text('📅 *Продление ключа*\n\nВведите количество дней для продления:', reply_markup=key_action_cancel_kb(key_id, 0), parse_mode='Markdown')
     await callback.answer()
 
-@router.message(AdminStates.key_extend_days, F.text)
+@router.message(AdminStates.key_extend_days, F.text, ~F.text.startswith('/'))
 async def process_key_extend(message: Message, state: FSMContext):
     """Обработка ввода дней для продления."""
     if not is_admin(message.from_user.id):
@@ -122,10 +122,11 @@ async def process_key_extend(message: Message, state: FSMContext):
     success = extend_vpn_key(key_id, days)
     if success:
         await message.answer(f'✅ Ключ продлён на {days} дней!')
-        from bot.services.vpn_api import reset_key_traffic_if_active, extend_key_on_server, restore_key_traffic_limit
-        await reset_key_traffic_if_active(key_id)
-        await extend_key_on_server(key_id, days)
-        await restore_key_traffic_limit(key_id)
+        from bot.services.vpn_api import push_key_to_panel, restore_traffic_limit_in_db
+        # Восстанавливаем лимит трафика в БД
+        restore_traffic_limit_in_db(key_id)
+        # Пушим ВСЕ данные из БД на панель (сброс up/down + обновление)
+        await push_key_to_panel(key_id, reset_traffic=True)
         key = get_vpn_key_by_id(key_id)
         if key:
             await state.set_state(AdminStates.key_view)
@@ -146,17 +147,13 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
     if not key.get('server_active'):
         await callback.answer('❌ Сервер неактивен', show_alert=True)
         return
-    server_data = {'id': key.get('server_id'), 'name': key.get('server_name'), 'host': key.get('host'), 'port': key.get('port'), 'web_base_path': key.get('web_base_path'), 'login': key.get('login'), 'password': key.get('password')}
-    inbound_id = key.get('panel_inbound_id')
-    email = key.get('panel_email')
-    if not email:
-        if key.get('username'):
-            email = f"user_{key['username']}"
-        else:
-            email = f"user_{key['telegram_id']}"
     try:
-        client = get_client_from_server_data(server_data)
-        await client.reset_client_traffic(inbound_id, email)
+        # Обнуляем traffic_used и пороги уведомлений в БД
+        from database.requests import reset_key_traffic_notification
+        reset_key_traffic_notification(key_id)
+        # Пушим данные из БД на панель (сброс up/down + правильные expiryTime и totalGB)
+        from bot.services.vpn_api import push_key_to_panel
+        await push_key_to_panel(key_id, reset_traffic=True)
         await callback.answer('✅ Трафик успешно сброшен!', show_alert=True)
     except VPNAPIError as e:
         logger.error(f'Ошибка сброса трафика: {e}')
@@ -186,7 +183,7 @@ async def start_change_traffic_limit(callback: CallbackQuery, state: FSMContext)
     await callback.message.edit_text('📊 *Изменение лимита трафика*\n\nВведите новый лимит в ГБ (0 = без лимита):', reply_markup=key_action_cancel_kb(key_id, user_telegram_id), parse_mode='Markdown')
     await callback.answer()
 
-@router.message(AdminStates.key_change_traffic, F.text)
+@router.message(AdminStates.key_change_traffic, F.text, ~F.text.startswith('/'))
 async def process_change_traffic_limit(message: Message, state: FSMContext):
     """Обработка ввода нового лимита трафика."""
     if not is_admin(message.from_user.id):
@@ -203,20 +200,13 @@ async def process_change_traffic_limit(message: Message, state: FSMContext):
     if not key:
         await message.answer('❌ Ключ не найден')
         return
-    server_data = {'id': key.get('server_id'), 'name': key.get('server_name'), 'host': key.get('host'), 'port': key.get('port'), 'web_base_path': key.get('web_base_path'), 'login': key.get('login'), 'password': key.get('password')}
-    inbound_id = key.get('panel_inbound_id')
-    client_uuid = key.get('client_uuid')
-    email = key.get('panel_email')
-    if not email:
-        if key.get('username'):
-            email = f"user_{key['username']}"
-        else:
-            email = f"user_{key['telegram_id']}"
     try:
+        # Сначала обновляем лимит в БД
         from database.requests import update_key_traffic_limit
-        client = get_client_from_server_data(server_data)
-        await client.update_client_traffic_limit(inbound_id=inbound_id, client_uuid=client_uuid, email=email, total_gb=traffic_gb)
         update_key_traffic_limit(key_id, traffic_gb * (1024**3))
+        # Пушим данные из БД на панель
+        from bot.services.vpn_api import push_key_to_panel
+        await push_key_to_panel(key_id)
         traffic_text = f'{traffic_gb} ГБ' if traffic_gb > 0 else 'без лимита'
         await message.answer(f'✅ Лимит трафика успешно обновлён: {traffic_text}!')
         await state.set_state(AdminStates.key_view)
@@ -284,7 +274,7 @@ async def select_add_key_inbound(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text('📊 *Лимит трафика*\n\nВведите лимит в ГБ (0 = без лимита):', reply_markup=add_key_step_kb(2), parse_mode='Markdown')
     await callback.answer()
 
-@router.message(AdminStates.add_key_traffic, F.text)
+@router.message(AdminStates.add_key_traffic, F.text, ~F.text.startswith('/'))
 async def process_add_key_traffic(message: Message, state: FSMContext):
     """Обработка ввода лимита трафика."""
     if not is_admin(message.from_user.id):
@@ -299,7 +289,7 @@ async def process_add_key_traffic(message: Message, state: FSMContext):
     await state.set_state(AdminStates.add_key_days)
     await message.answer('📅 *Срок действия*\n\nВведите количество дней:', reply_markup=add_key_step_kb(3), parse_mode='Markdown')
 
-@router.message(AdminStates.add_key_days, F.text)
+@router.message(AdminStates.add_key_days, F.text, ~F.text.startswith('/'))
 async def process_add_key_days(message: Message, state: FSMContext):
     """Обработка ввода срока действия."""
     if not is_admin(message.from_user.id):
@@ -384,4 +374,108 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"➕ *Добавление ключа для {(format_user_display(user) if user else '?')}*\n\nВыберите сервер:", reply_markup=add_key_server_kb(servers), parse_mode='Markdown')
     else:
         await cancel_add_key(callback, state)
+
+@router.callback_query(F.data == 'admin_sync_keys')
+async def sync_keys_with_panel(callback: CallbackQuery, state: FSMContext):
+    """Принудительная синхронизация всех ключей БД → панель."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    
+    await callback.answer('🔄 Запуск синхронизации...')
+    await callback.message.edit_text('⏳ *Синхронизация ключей с панелью...*\n\nЭто может занять некоторое время.', parse_mode='Markdown')
+    
+    import json
+    from database.requests import get_all_active_keys_with_server, get_all_servers
+    from bot.services.vpn_api import push_key_to_panel, get_client_from_server_data
+    from datetime import datetime
+    
+    keys = get_all_active_keys_with_server()
+    if not keys:
+        await callback.message.edit_text('✅ Нет активных ключей для синхронизации.', parse_mode='Markdown')
+        return
+    
+    # Группируем по серверам
+    keys_by_server = {}
+    for key in keys:
+        sid = key['server_id']
+        if sid not in keys_by_server:
+            keys_by_server[sid] = []
+        keys_by_server[sid].append(key)
+    
+    servers = get_all_servers()
+    server_map = {s['id']: s for s in servers}
+    
+    fixed = 0
+    errors = 0
+    ok = 0
+    
+    for server_id, server_keys in keys_by_server.items():
+        server = server_map.get(server_id)
+        if not server or not server.get('is_active'):
+            continue
+        try:
+            client = get_client_from_server_data(server)
+            inbounds = await client.get_inbounds()
+            
+            panel_map = {}
+            for inbound in inbounds:
+                settings = json.loads(inbound.get('settings', '{}'))
+                for cl in settings.get('clients', []):
+                    panel_map[cl.get('email', '')] = {
+                        'expiryTime': cl.get('expiryTime', 0),
+                        'totalGB': cl.get('totalGB', 0)
+                    }
+            
+            for key in server_keys:
+                email = key.get('panel_email')
+                if not email or email not in panel_map:
+                    continue
+                
+                panel = panel_map[email]
+                needs_fix = False
+                
+                # Проверяем expiryTime
+                expires_at = key.get('expires_at')
+                if expires_at:
+                    dt = datetime.fromisoformat(str(expires_at))
+                    expected_ms = int(dt.timestamp() * 1000)
+                    panel_ms = panel['expiryTime']
+                    if panel_ms > 0 and abs(expected_ms - panel_ms) > 86400 * 1000:
+                        needs_fix = True
+                    elif panel_ms == 0 and expected_ms > 0:
+                        needs_fix = True
+                
+                # Проверяем totalGB
+                traffic_limit = key.get('traffic_limit', 0) or 0
+                panel_total = panel['totalGB']
+                if traffic_limit > 0 and (panel_total == 0 or abs(panel_total - traffic_limit) > 1024**3):
+                    needs_fix = True
+                elif traffic_limit == 0 and panel_total > 0:
+                    needs_fix = True
+                
+                if needs_fix:
+                    try:
+                        await push_key_to_panel(key['id'])
+                        fixed += 1
+                    except Exception as e:
+                        errors += 1
+                        logger.error(f"Ошибка синхронизации ключа {key['id']} ({email}): {e}")
+                else:
+                    ok += 1
+        except Exception as e:
+            errors += len(server_keys)
+            logger.error(f"Ошибка подключения к серверу {server.get('name', server_id)}: {e}")
+    
+    result = (
+        f"✅ *Синхронизация завершена*\n\n"
+        f"🔧 Исправлено: *{fixed}*\n"
+        f"✅ Без расхождений: *{ok}*\n"
+    )
+    if errors > 0:
+        result += f"❌ Ошибок: *{errors}*\n"
+    result += f"\n📊 Всего ключей: *{len(keys)}*"
+    
+    await callback.message.edit_text(result, reply_markup=back_and_home_kb('admin_users'), parse_mode='Markdown')
+
     await callback.answer()

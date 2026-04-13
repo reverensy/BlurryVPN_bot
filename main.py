@@ -22,6 +22,9 @@ from bot.services.scheduler import run_daily_tasks, run_update_check_scheduler, 
 from bot.handlers.user import router as user_router
 from bot.handlers.admin import admin_router
 
+from bot.handlers.user.manual_payment import router as manual_payment_user_router
+from bot.handlers.admin.manual_payments_processing import router as manual_payments_processing_router
+
 
 # Создаём папку для логов если её нет (важно сделать до basicConfig)
 os.makedirs("logs", exist_ok=True)
@@ -87,8 +90,10 @@ async def main():
     
     # Регистрируем роутеры
     # Порядок важен: сначала более специфичные, потом общие
-    dp.include_router(admin_router)           # Админ-панель (общая)
+    dp.include_router(admin_router) # Админ-панель (общая)
+    dp.include_router(manual_payments_processing_router)
     dp.include_router(user_router)            # Пользователь (имеет строгий внутренний порядок)
+    dp.include_router(manual_payment_user_router)
     
     # Глобальный обработчик ошибок сети
     from aiogram.exceptions import TelegramNetworkError

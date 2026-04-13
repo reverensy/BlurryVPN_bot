@@ -115,7 +115,8 @@ def buy_key_kb(
     yookassa_qr_enabled: bool = False,
     order_id: str = None,
     show_balance_button: bool = False,
-    demo_enabled: bool = False
+    demo_enabled: bool = False,
+    manual_enabled: bool = False
 ) -> InlineKeyboardMarkup:
     """
     Клавиатура для страницы «Купить ключ».
@@ -167,7 +168,11 @@ def buy_key_kb(
         builder.row(
             InlineKeyboardButton(text="🏦 Демо оплата (РФ карта)", callback_data=cb_data)
         )
-
+    if manual_enabled: # <-- ИСПОЛЬЗУЕМ ФЛАГ
+        cb_data = f"manual_tariffs:{order_id}" if order_id else "manual_tariffs"
+        builder.row(
+            InlineKeyboardButton(text="✍️ Оплата вручную", callback_data=cb_data)
+        )
     # Кнопка «Использовать баланс» — только при выполнении всех трёх условий
     # (is_referral_enabled + reward_type='balance' + personal_balance > 0)
     # На этом экране больше ничего про баланс не показывать
@@ -267,28 +272,34 @@ def balance_payment_kb(
     return builder.as_markup()
 
 
-def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: str = None, is_cards: bool = False, is_crypto: bool = False, is_balance: bool = False, is_qr: bool = False, groups_data: list = None, is_demo: bool = False) -> InlineKeyboardMarkup:
+def tariff_select_kb(
+    tariffs: list, 
+    back_callback: str = "buy_key", 
+    order_id: str = None, 
+    is_cards: bool = False, 
+    is_crypto: bool = False, 
+    is_balance: bool = False, 
+    is_qr: bool = False, 
+    groups_data: list = None, 
+    is_demo: bool = False,
+    is_manual: bool = False
+) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора тарифа для оплаты Stars, Картами, Криптой или Балансом.
-    
-    Args:
-        tariffs: Список тарифов из БД (используется только если groups_data=None)
-        back_callback: Callback для кнопки «Назад»
-        order_id: ID существующего ордера (для оптимизации)
-        is_cards: True если выбор тарифа для оплаты картой
-        is_crypto: True если выбор тарифа для оплаты криптой (простой режим)
-        is_balance: True если выбор тарифа для оплаты с баланса
-        is_qr: True если выбор тарифа для QR-оплаты (ЮКасса)
-        is_demo: True если выбор тарифа для демонстрационной РФ оплаты
-        groups_data: Список dict с ключами 'group' и 'tariffs' для группировки.
-                     Если None — tariffs отображаются без группировки.
+    Клавиатура выбора тарифа...
     """
     builder = InlineKeyboardBuilder()
     
     def _add_tariff_buttons(tariff_list):
         """Добавляет кнопки тарифов в builder."""
         for tariff in tariff_list:
-            if is_crypto:
+            if is_manual:
+                price_rub = tariff.get('price_rub')
+                if price_rub is None or price_rub <= 0: # Ручная оплата может быть и бесплатной (0)
+                    continue
+                price_display = f"{price_rub} ₽"
+                prefix = "manual_pay"
+                emoji = '✍️'
+            elif is_crypto:
                 price_usd = tariff['price_cents'] / 100
                 price_str = f"{price_usd:g}".replace('.', ',')
                 price_display = f"${price_str}"
@@ -326,9 +337,7 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
                 price_display = f"{tariff['price_stars']} звёзд"
                 prefix = "stars_pay"
                 emoji = '⭐'
-                
             cb_data = f"{prefix}:{tariff['id']}:{order_id}" if order_id else f"{prefix}:{tariff['id']}"
-            
             builder.row(
                 InlineKeyboardButton(
                     text=f"{emoji} {tariff['name']} — {price_display}",

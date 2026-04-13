@@ -25,6 +25,8 @@ __all__ = [
     'is_trial_enabled',
     'get_trial_tariff_id',
     'is_demo_payment_enabled',
+    'is_manual_payment_enabled',       # <-- ДОБАВЛЕНО
+    'get_manual_payment_requisites', # <-- ДОБАВЛЕНО
 ]
 
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -174,3 +176,10 @@ def get_trial_tariff_id() -> Optional[int]:
 def is_demo_payment_enabled() -> bool:
     """Включена ли демонстрационная оплата РФ картой."""
     return get_setting('demo_payment_enabled', '0') == '1'
+def is_manual_payment_enabled() -> bool:
+    """Проверяет, включена ли ручная оплата в настройках."""
+    return get_setting('manual_payment_enabled', '0') == '1'
+
+def get_manual_payment_requisites() -> str:
+    """Возвращает текст с реквизитами для ручной оплаты."""
+    return get_setting('manual_payment_requisites', 'Реквизиты не указаны. Свяжитесь с администратором.')

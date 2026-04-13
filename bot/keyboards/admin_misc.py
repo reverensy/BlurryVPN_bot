@@ -47,7 +47,9 @@ def admin_main_menu_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text='⚙️ Настройки бота', callback_data='admin_bot_settings'),
         InlineKeyboardButton(text='📥 Скачать логи', callback_data='admin_logs_menu')
     )
-    builder.row(InlineKeyboardButton(text='🤍 Поддержка автора', callback_data='admin_author_support', style='success'))
+    builder.row(
+        InlineKeyboardButton(text="✍️ Платежи вручную", callback_data="admin_manual_payments_list")
+        )
     builder.row(home_button())
     return builder.as_markup()
 

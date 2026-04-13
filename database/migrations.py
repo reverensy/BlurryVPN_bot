@@ -28,7 +28,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 
 
 # Текущая версия схемы БД
-LATEST_VERSION = 15
+LATEST_VERSION = 16
 
 
 def get_current_version() -> int:
@@ -1174,6 +1174,52 @@ def migration_15(conn: sqlite3.Connection) -> None:
     
     logger.info("Миграция v15 применена")
 
+def migration_16(conn: sqlite3.Connection) -> None:
+    """
+    Миграция v16: Система ручной оплаты.
+    
+    Изменения:
+    - Новая таблица `manual_payments` для хранения заявок.
+    - Новые настройки `manual_payment_enabled` и `manual_payment_requisites`.
+    - Добавляет настройку `demo_payment_enabled` (бывшая "демо оплата")
+    """
+    logger.info("Применение миграции v16 (Ручная оплата)...")
+
+    # 1. Создаем таблицу для заявок на ручную оплату
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS manual_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT,
+            tariff_id INTEGER NOT NULL,
+            key_id_to_renew INTEGER,
+            amount REAL NOT NULL,
+            screenshot_file_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            admin_id INTEGER,
+            processed_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL,
+            FOREIGN KEY (tariff_id) REFERENCES tariffs (id) ON DELETE SET NULL,
+            FOREIGN KEY (key_id_to_renew) REFERENCES vpn_keys (id) ON DELETE SET NULL
+        );
+    """)
+    logger.info("Таблица `manual_payments` создана.")
+
+    # 2. Добавляем настройки в таблицу `settings`
+    manual_payment_settings = [
+        ('manual_payment_enabled', '0'), # Выключено по умолчанию
+        ('manual_payment_requisites', 'Здесь будут ваши реквизиты.\nОтредактируйте их в Админ-панели -> Оплаты -> Оплата вручную.'),
+        ('demo_payment_enabled', '0') # Настройка для старой "демо оплаты", теперь тоже управляется
+    ]
+    for key, value in manual_payment_settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+    logger.info("Настройки для ручной и демо-оплаты добавлены.")
+
+    logger.info("Миграция v16 применена")
 
 MIGRATIONS = {
     1: migration_1,
@@ -1191,6 +1237,7 @@ MIGRATIONS = {
     13: migration_13,
     14: migration_14,
     15: migration_15,
+    16: migration_16
 }
 
 

@@ -1124,7 +1124,7 @@ async def show_manual_payment_menu(callback: CallbackQuery, state: FSMContext):
     builder.row(InlineKeyboardButton(text="✏️ Изменить реквизиты", callback_data="admin_manual_mgmt_edit_reqs"))
     builder.row(back_button("admin_payments"), home_button())
 
-    await safe_edit_or_send(callback.message, text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await safe_edit_or_send(callback.message, text, reply_markup=builder.as_markup())
     await callback.answer()
 
 

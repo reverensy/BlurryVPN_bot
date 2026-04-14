@@ -354,7 +354,7 @@ class XUIClient(BaseVPNClient):
         email: str,
         total_gb: int = 0,
         expire_days: int = 30,
-        limit_ip: int = 1,
+        limit_ip: int = 3,
         enable: bool = True,
         tg_id: str = "",
         flow: str = ""

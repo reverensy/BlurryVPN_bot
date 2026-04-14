@@ -33,7 +33,7 @@ class BaseVPNClient(abc.ABC):
         pass
 
     @abstractmethod
-    async def add_client(self, inbound_id: int, email: str, total_gb: int=0, expire_days: int=30, limit_ip: int=1, enable: bool=True, tg_id: str='', flow: str='') -> Dict[str, Any]:
+    async def add_client(self, inbound_id: int, email: str, total_gb: int=0, expire_days: int=30, limit_ip: int=3, enable: bool=True, tg_id: str='', flow: str='') -> Dict[str, Any]:
         pass
 
     @abstractmethod
